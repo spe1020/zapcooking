@@ -28,3 +28,6 @@ build/
 
 # Claude Code
 CLAUDE.md
+
+# NIP-108 gated content store (contains secrets)
+.gated-content-store.json
