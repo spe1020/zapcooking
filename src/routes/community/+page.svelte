@@ -42,7 +42,7 @@
   // Local state for immediate UI updates
   let activeTab: FilterMode = 'following';
   
-  // Check if user has active membership (for Members tab)
+  // Check if user has active membership (for Pantry tab)
   let hasActiveMembership = false;
   let checkingMembership = false;
   
@@ -471,23 +471,46 @@
           return true;
         });
       } else if (activeTab === 'members') {
-        // For members mode, publish ONLY to the members relay using NDKRelaySet
+        // For pantry mode, publish ONLY to the pantry relay using NDKRelaySet
+        // This ensures the post only goes to pantry.zap.cooking
         const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
-        const membersRelayUrl = 'wss://members.zap.cooking';
+        const pantryRelayUrl = 'wss://pantry.zap.cooking';
         
-        // Create a relay set with ONLY the members relay
-        const membersRelaySet = NDKRelaySet.fromRelayUrls([membersRelayUrl], $ndk, true);
+        console.log('[Pantry] Publishing to pantry relay only:', pantryRelayUrl);
         
-        // Publish to the relay set - this ensures ONLY members relay receives the event
-        publishPromise = event.publish(membersRelaySet).then((publishedRelays) => {
-          // Verify members relay received the event
-          const membersRelayPublished = Array.from(publishedRelays).some(
-            relay => relay.url === membersRelayUrl || relay.url === membersRelayUrl + '/'
+        // Ensure the relay is in the pool and connected
+        const normalizedPantryUrl = normalizeRelayUrl(pantryRelayUrl);
+        const existingRelay = $ndk.pool.relays.get(normalizedPantryUrl);
+        
+        if (!existingRelay || existingRelay.status !== 1) {
+          // Add relay to pool if not already there
+          $ndk.addExplicitRelay(pantryRelayUrl);
+          // Wait a bit for connection to establish
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        // Create a relay set with ONLY the pantry relay
+        // Use true for third param to allow temporary connection if not in pool
+        const pantryRelaySet = NDKRelaySet.fromRelayUrls([pantryRelayUrl], $ndk, true);
+        
+        // Publish to the relay set - this ensures ONLY pantry relay receives the event
+        publishPromise = event.publish(pantryRelaySet).then((publishedRelays) => {
+          console.log('[Pantry] Publish result:', publishedRelays.size, 'relays confirmed');
+          // Verify pantry relay received the event
+          const pantryRelayPublished = Array.from(publishedRelays).some(
+            relay => normalizeRelayUrl(relay.url) === normalizeRelayUrl(pantryRelayUrl)
           );
-          if (!membersRelayPublished) {
-            throw new Error('Failed to publish to members relay');
+          if (!pantryRelayPublished) {
+            throw new Error('Failed to publish to The Pantry relay. Make sure you are a member and try again.');
           }
           return true;
+        }).catch((err) => {
+          console.error('[Pantry] Publish error:', err);
+          // Provide more helpful error message
+          if (err.message?.includes('Not enough relays')) {
+            throw new Error('The Pantry relay did not accept your event. Make sure you are an active member and try again.');
+          }
+          throw err;
         });
       } else {
         publishPromise = event.publish().then(() => true);
@@ -954,11 +977,11 @@
                 </div>
               {/if}
               
-              <!-- Relay indicator for members/garden tabs -->
+              <!-- Relay indicator for pantry/garden tabs -->
               {#if activeTab === 'members'}
                 <div class="mb-2 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
                   <p class="text-xs font-medium text-blue-700 dark:text-blue-300">
-                    📡 Posting to: <span class="font-semibold">members.zap.cooking</span>
+                    📡 Posting to: <span class="font-semibold">The Pantry</span>
                   </p>
                 </div>
               {:else if activeTab === 'garden'}
@@ -1048,7 +1071,7 @@
         class="px-4 py-2 text-sm font-medium transition-colors relative"
         style="color: {activeTab === 'global' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}"
       >
-        Global Food
+        Global
         {#if activeTab === 'global'}
           <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
         {/if}
@@ -1074,32 +1097,29 @@
         class="px-4 py-2 text-sm font-medium transition-colors relative"
         style="color: {activeTab === 'replies' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}"
       >
-        Notes & Replies
+        Replies
         {#if activeTab === 'replies'}
           <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
         {/if}
       </button>
 
-      <!-- Members tab hidden for now - keeping functionality intact -->
-      <!-- {#if hasActiveMembership}
-        <button
-          on:click={() => setTab('members')}
-          class="px-4 py-2 text-sm font-medium transition-colors relative"
-          style="color: {activeTab === 'members' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}"
-        >
-          Members
-          {#if activeTab === 'members'}
-            <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
-          {/if}
-        </button>
-      {/if} -->
+      <button
+        on:click={() => setTab('members')}
+        class="px-4 py-2 text-sm font-medium transition-colors relative"
+        style="color: {activeTab === 'members' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}"
+      >
+        Pantry
+        {#if activeTab === 'members'}
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
+        {/if}
+      </button>
 
       <button
         on:click={() => setTab('garden')}
         class="px-4 py-2 text-sm font-medium transition-colors relative"
         style="color: {activeTab === 'garden' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)'}"
       >
-        The Garden
+        Garden
         {#if activeTab === 'garden'}
           <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
         {/if}
@@ -1116,15 +1136,14 @@
     </div>
   {/if}
   
-  <!-- Members tab and membership prompt hidden for now -->
-  <!-- Show membership prompt for Members tab if not a member -->
-  <!-- {#if activeTab === 'members' && $userPublickey && !hasActiveMembership && !checkingMembership}
+  <!-- Show membership prompt for Pantry tab if not a member -->
+  {#if activeTab === 'members' && $userPublickey && !hasActiveMembership && !checkingMembership}
     <div class="mb-4 p-4 bg-accent-gray rounded-lg" style="border: 1px solid var(--color-input-border)">
       <p class="text-sm" style="color: var(--color-text-primary)">
-        <a href="/membership" class="font-medium underline hover:opacity-80">Become a member</a> to access exclusive content from the private member community.
+        <a href="/membership" class="font-medium underline hover:opacity-80">Become a member</a> to access exclusive content from The Pantry.
       </p>
     </div>
-  {/if} -->
+  {/if}
   
   {#key feedKey}
     <FoodstrFeedOptimized bind:this={feedComponent} filterMode={activeTab} />

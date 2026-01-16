@@ -240,7 +240,7 @@ import ClientAttribution from './ClientAttribution.svelte';
     fallback: ['wss://nos.lol', 'wss://relay.damus.io'],  // Fast general relays (nos.lol 342ms, relay.damus.io 394ms)
     discovery: ['wss://nostr.wine', 'wss://relay.primal.net', 'wss://purplepag.es'],  // Additional relays for discovery
     profiles: ['wss://purplepag.es'],             // Profile metadata (356ms, specialized for kind:0)
-    members: ['wss://members.zap.cooking'],      // Private member relay
+    members: ['wss://pantry.zap.cooking'],      // Private member relay
     pro: ['wss://pro.zap.cooking'],               // Pro member relay
     garden: ['wss://garden.zap.cooking']          // Garden relay (no trailing slash!)
   };
@@ -1884,7 +1884,7 @@ import ClientAttribution from './ClientAttribution.svelte';
         }
         
         // Use only members relay (not pro relay) - normalize URL for consistency
-        const memberRelays: string[] = [normalizeRelayUrl(RELAY_POOLS.members[0])]; // Only members.zap.cooking
+        const memberRelays: string[] = [normalizeRelayUrl(RELAY_POOLS.members[0])]; // Only pantry.zap.cooking
         
         // Fetch older events from member relay (all content, not just food-tagged)
         const memberFilter: any = {
