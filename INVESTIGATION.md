@@ -1,107 +1,121 @@
-# Sign-in Modal Refresh — Investigation
+# Sign-in Modal Refresh — Investigation (revised brief)
 
-Branch: `investigate/signin-modal-refresh`. No production code touched. Stopping here for review per the brief.
+Branch: `investigate/signin-modal-refresh`. Investigation only — no production code touched. Stopping here for review per the brief.
+
+The previous attempt at this work (PR #345 on `feat/signin-modal-refresh`) was rejected. This pass is against the revised brief — different visual direction (wordmark + tile row instead of brand mark + disclosure), different typography (Albert Sans instead of Fraunces), and an explicit color palette.
 
 ---
 
 ## Blockers before implementation
 
-These two need answers before the `feat/signin-modal-refresh` branch starts.
+### B1. The visual spec is still missing from the repo
 
-### B1. The visual spec doesn't exist in the repo
+The brief points at `docs/design/signin-modal-final.html` as the mockup. **There is no `docs/design/` directory at all** in the working tree. Same blocker as yesterday with a new filename — `signin-modal-v2.html` was the previous miss.
 
-The brief points at `docs/design/signin-modal-v2.html` as the mockup. **There is no `docs/design/` directory at all** in the working tree (`origin/main` HEAD `dcc3141`), and no file matching that name anywhere in the repo. I can only build from the inline UI requirements in the brief, which describe the layout but not pixel-level styling, exact ramps for the gradient, the bolt-flicker animation curve, etc.
+I can build from the inline brief description (palette is now spelled out with hex codes, hierarchy is explicit, typography is named), so the gap is narrower than before. But pixel-level details — exact drop-shadow ramp on the primary CTA glow, tile button hover states, divider styling, exact wordmark sizing on each breakpoint, modal entrance curve nuance — won't match without the HTML.
 
-Two ways forward:
-- (preferred) drop the HTML mockup into `docs/design/signin-modal-v2.html` and I'll match it
-- or accept that I'll build from the inline brief alone and we iterate visually in PR review
+Two options:
+- (preferred) drop `signin-modal-final.html` into `docs/design/` and I'll match it
+- or accept inline-brief fidelity and iterate visually in PR review
 
-### B2. The brief says "four sign-in methods" but the modal has five
+### B2. Albert Sans isn't in the project
 
-The opening paragraph says "four Nostr sign-in methods (NIP-07 browser extension, 'Create Profile', QR/universal pairing, paste bunker URI, import key)" — that's five things in the parenthetical. The hierarchy section then maps them as:
+Not in `package.json`, not in `app.html`, not in `app.css`. The repo currently loads only Orbitron via Google Fonts (`app.html:71-74`). Adding Albert Sans the same way (extending the existing `<link>` to include it) is zero-dep and consistent with how Orbitron is wired — recommend that. Confirm before I go.
 
-- Primary: extension
-- Secondary: create new
-- Disclosure: QR/pair, bunker URI, import key
+### B3. Logo asset — the situation is better than the brief implies, but worth a call
 
-That arithmetic works. Going to assume the "four" was a typo and treat all five as in-scope. **Confirm.**
+The brief says: "The current logo asset is black-on-white and won't read on the dark modal surface." That's not quite right. The repo has **two** wordmark variants:
+
+- `static/zap_cooking_logo_black.svg` — black wordmark + flame icon for light surfaces
+- `static/zap_cooking_logo_white.svg` — **white wordmark** + flame icon (gradient `#FFAA00 → #FF0C1C`) for dark surfaces
+
+Both are 1080×290 vectors. Today's `/login` route already swaps between them via `$: isDarkMode` (`+page.svelte:28`) and the `<img src={isDarkMode ? '/zap_cooking_logo_white.svg' : '/zap_cooking_logo_black.svg'}>` at `:1018`.
+
+So a working dark-surface wordmark exists. The brief's desired tint is **cream `#F5EBDD`** — not pure white. Two paths:
+
+- **(A) Use the existing white SVG.** Pure white reads cleanly on the dark `#13171F` surface. Fast to ship; no new asset. The mockup uses cream as a brand-warmth choice, not a contrast requirement.
+- **(B) Add a cream-tinted variant.** Either a new SVG file (`zap_cooking_logo_cream.svg`) or — simpler — load the white SVG inline and recolor via `currentColor` / `fill` override at the use site. The flame icon's gradient stays untouched in either case (it's the brand mark and reads fine on dark).
+
+Going to default to (A) for the implementation pass unless told otherwise. Asset is in the repo, swap is one line.
 
 ---
 
 ## 1. Where the modal mounts
 
-- `/login` is a SvelteKit route at `src/routes/login/+page.svelte:1-1223`. There is no global overlay or header-triggered modal — the Header "Sign in" button at `src/components/Header.svelte:255` is a plain `href="/login"` link. Every other "sign in to ..." prompt across the app (PostComposer:495, NoteActionBar, ThreadCommentActions, etc.) navigates to `/login?redirect=...`.
-- iOS uses a separate component: `src/components/LoginFormIOS.svelte:1-956`. The route swaps based on `$platformIsIOS` at `src/routes/login/+page.svelte:499`. The two flows are **structurally different**, not just style-different — see §5.
-- **Implication for the refresh:** the new modal is really one route page. Calling it a "modal" in product copy is fine, but the markup is a full-page card today, not an overlay over content.
+- `/login` is a SvelteKit route at `src/routes/login/+page.svelte:1-1223`. Not a global overlay. The Header "Sign in" button at `src/components/Header.svelte:255` is a plain `href="/login"`. Every "sign in to ..." prompt across the app (PostComposer:495, NoteActionBar, ThreadCommentActions, etc.) navigates to `/login?redirect=...`.
+- iOS uses a separate component: `src/components/LoginFormIOS.svelte:1-955`. The route swaps on `$platformIsIOS` at `+page.svelte:499`.
+- **The brief calls this surface a "modal" but it's a route page rendering a centered card.** Real ESC-closes / click-outside-closes behavior on the route only makes sense as "navigate back" (history.back) or "navigate to /explore". Sub-modals (nsec / bunker / generate / NIP-46 universal) keep their existing modal-on-modal behavior.
 
 ## 2. Sign-in method handlers
 
-All five exist on the page; all five route through `authManager` (`src/lib/authManager.ts`). The new markup needs to wire to the same five.
+Five methods, all on `authManager` (`src/lib/authManager.ts`). All five can be invoked unchanged from the new markup — handlers don't reach into the DOM.
 
 | Method | Page handler | authManager call | Side effects |
 |---|---|---|---|
-| NIP-07 extension | `loginWithNIP07()` `+page.svelte:141-158` | `authenticateWithNIP07()` `authManager.ts:140-180` | `localStorage.nostrcooking_loggedInPublicKey`, NDK signer set |
-| Create Profile (generate keys) | `useGeneratedKeys(skipProfile)` `+page.svelte:246-312` | indirectly via `authenticateWithPrivateKey` after key gen | `localStorage.nostrcooking_loggedInPublicKey` + `nostrcooking_privateKey`; publishes kind:0 metadata; multi-step backup→profile guard |
-| QR / universal NIP-46 pairing | `startUniversalPairing()` `+page.svelte:320-341` | `startNip46PairingUniversal()` `authManager.ts:639-718` | `localStorage.nostrcooking_nip46_pending`; opens response listener; on Android, `window.open(uri, '_system')` deeplinks to signer |
-| Paste bunker URI (NIP-46) | `loginWithBunker()` `+page.svelte:178-199` | `authenticateWithNIP46(connectionString)` `authManager.ts:332-471` | `localStorage.nostrcooking_nip46`, `nostrcooking_loggedInPublicKey`, `nostrcooking_authMethod='nip46'` |
-| Import private key (nsec) | `loginWithPrivateKey()` `+page.svelte:160-176` | `authenticateWithPrivateKey(pk)` `authManager.ts:186-246` | `localStorage.nostrcooking_loggedInPublicKey` + `nostrcooking_privateKey` |
-
-All can be invoked unchanged from new markup. The handlers don't reach into the DOM.
+| Sign in with Browser Signer (NIP-07) | `loginWithNIP07()` `+page.svelte:141-158` | `authenticateWithNIP07()` `authManager.ts:140-180` | `localStorage.nostrcooking_loggedInPublicKey`, NDK signer set |
+| Create Profile (generate keys) | `useGeneratedKeys(skipProfile)` `+page.svelte:246-312` | `authenticateWithPrivateKey` after key gen | `localStorage.nostrcooking_loggedInPublicKey` + `nostrcooking_privateKey`; publishes kind:0 metadata; multi-step backup→profile guard |
+| Scan QR / Universal Pairing | `startUniversalPairing()` `+page.svelte:320-341` | `startNip46PairingUniversal()` `authManager.ts:639-718` | `localStorage.nostrcooking_nip46_pending`; opens response listener; on Android, `window.open(uri, '_system')` deeplinks to signer |
+| Paste Bunker URI (NIP-46) | `loginWithBunker()` `+page.svelte:178-199` | `authenticateWithNIP46(connectionString)` `authManager.ts:332-471` | `localStorage.nostrcooking_nip46`, `nostrcooking_loggedInPublicKey`, `nostrcooking_authMethod='nip46'` |
+| Import Key (nsec) | `loginWithPrivateKey()` `+page.svelte:160-176` | `authenticateWithPrivateKey(pk)` `authManager.ts:186-246` | `localStorage.nostrcooking_loggedInPublicKey` + `nostrcooking_privateKey` |
 
 ## 3. Modal management primitive
 
-- A generic `<Modal>` component exists: `src/components/Modal.svelte:1-122`. The current login uses it for nsec/bunker/generate-keys/NIP-46-universal sub-modals via `bind:open={...} on:close={modalCleanup}`.
-- It already provides:
-  - `aria-modal="true"` (`:73`), `aria-labelledby="title"` (`:72`)
-  - ESC close (`:35-51`)
-  - Click-outside close on the backdrop (`:65`, `on:click|self={close}`)
-  - Body scroll lock via inline style block (`:106-120`, `html { overflow: hidden; touch-action: none }`)
-  - Portal-to-body via a custom action (`:3-13`)
-  - Svelte `transition:` for the open animation (blur 250ms, scale 250ms — `:67`, `:71`)
-- It does **not** provide a focus trap or initial-focus management. No focus-trap library in `package.json`. **Recommendation:** stay self-contained for this PR — implement the trap with a small handler over the modal's tab cycle (~25 lines of plain JS, no dep). If we later want a primitive, extract it then.
-- The `<Modal>` API is already aligned with what we need (open binding + close event), so the refresh can keep using it without modifications.
+- `<Modal>` exists at `src/components/Modal.svelte:1-122`. Sub-modals already use it via `bind:open={...} on:close={modalCleanup}`.
+- Already provides: `aria-modal="true"`, `aria-labelledby="title"`, ESC close, click-outside on backdrop, body scroll lock (inline `<style>` block), portal-to-body, blur+scale entrance transition.
+- Does **not** provide: focus trap, initial focus management. No focus-trap library in `package.json`.
+- **Recommendation:** stay self-contained. Implement focus trap with a small inline handler (~25-30 LOC, no dep). The previous attempt (PR #345) did this — code can be re-derived or cherry-picked.
 
-## 4. Analytics / event tracking
+## 4. Logo asset
 
-**None exist.** Searched the login route, the iOS form, and `authManager.ts` for `track(`, `analytics.`, `posthog.`, `mixpanel.`, `gtag(`, custom event dispatches — zero hits. The current login fires no events.
+Covered in B3 above. Summary: dark-mode wordmark exists at `static/zap_cooking_logo_white.svg`. Cream tint per the mockup palette is a small additional ask if we want exact fidelity; otherwise the white variant ships.
 
-The brief says "preserve every existing event" — there are zero, so nothing to preserve. Worth noting that this is a small architectural gap (we have no instrumentation on auth funnel) but explicitly out of scope for this UI refresh; flag separately.
+The flame mark inside the wordmark (left of the "ZAP COOKING" text) uses a `#FFAA00 → #FF0C1C` linear gradient — close to but not identical to the brief's `flame #F7931A / ember #FF5F1F` palette. Worth a call: do we update the source SVG to match the new palette, or accept the existing gradient as visually-aligned-enough?
 
-## 5. Mobile / Capacitor considerations
+## 5. Analytics / event tracking
 
-- **iOS uses a different layout entirely.** `LoginFormIOS.svelte` is a full-page scrolling card (`:837-927`), not a viewport-centered modal with a backdrop blur like web. It also drops NIP-07 (App Store can't deliver an extension) and drops QR/universal pairing (App Store policy on cross-app handoff — see PR #340 / #331 history).
-- iOS hierarchy today: Create Profile (primary, `:860-870`), then private-key import + bunker paste as secondary link-style buttons (`:874-889`).
-- **Safe-area:** `src/app.css:18-23` defines `--safe-area-inset-*` CSS variables from `env(safe-area-inset-*)`. The current iOS form uses plain `pt-12 md:pt-20` (`:837`), not the safe-area variables. **UNKNOWN:** whether notched devices currently look right — worth a manual smoke during implementation.
-- **Keyboard overlap:** no `visualViewport` workarounds, no scroll-on-focus handlers found. Capacitor's keyboard plugin presumably handles it implicitly. **UNKNOWN:** whether the bunker-paste textarea on iOS gets covered by the keyboard.
-- **Platform-gated UI:** `supportsNIP46QRPairing()` (`src/lib/platform.ts:134`, `false` on iOS) and `supportsNIP46BunkerPaste()` (`:143`, true everywhere) are defined but **not called by the login route**. The platform gating today is implicit — the iOS form is a different file that omits the QR button. The refresh should call these helpers explicitly so the policy lives in one place.
-- **Implication for the refresh:** we have to refresh **both** `+page.svelte` AND `LoginFormIOS.svelte`, OR collapse them into one component that uses the helpers. Collapsing is the cleaner end state but expands scope. Recommend keeping them as two files for this PR and refreshing both — same visual language, same `<Modal>` usage, but iOS continues to mount a stripped subset.
+**None.** Confirmed yesterday and re-confirmed: no `track(`, `analytics.`, `posthog.`, `mixpanel.`, `gtag(`, no custom `dispatchEvent` calls in the login route or `authManager.ts`. "Preserve every existing event" simplifies to "no events to preserve."
 
-## 6. Risks / surprises
+If we want to add basic instrumentation as part of this refresh — `signin_method_clicked` per CTA, `signin_succeeded`, `signin_failed` — that's net-new infrastructure and is **out of scope** per the brief unless explicitly added. Flagging.
 
-- **Form state lives on the page, not in the modal.** `nsecInput`, `bunkerConnectionString`, `generatedKeys`, profile fields are all page-level `let`s consumed by sub-modals via `bind:`. The refresh can keep this pattern (simplest) or hoist into a small store. Don't extract sub-modals into separate components without prop-drilling — the form/auth coupling is real.
-- **Multi-step Create Profile flow.** `useGeneratedKeys()` is a multi-step modal: step 1 download backup → step 2 profile setup. The Next button at `:835` is `disabled={!backupDownloaded}` — that guard is load-bearing for "user actually saved the key." Visual redesign of this flow must keep the guard. The brief doesn't mention multi-step explicitly; flag as design ambiguity.
-- **NIP-46 universal pairing has a side-effect listener.** `authManager.startNip46PairingUniversal()` returns immediately with the QR URI but starts a relay-listener subscription that will flip `authState.isAuthenticated` true async. The redirect at `+page.svelte:108-111` runs as a reactive `$:` block tied to that state. If the modal closes mid-pairing (user clicks away, presses ESC), the listener keeps running until either pairing completes or `cleanup()` fires from a different code path. This is existing behavior, not new — but worth confirming the new "click outside / ESC closes the modal" behavior doesn't tear down the pairing listener mid-flight. The cleanest answer: ESC/backdrop close should leave the pairing-pending state intact; only an explicit Cancel should abort.
-- **`bind:open` on every sub-modal is load-bearing** — `nsecModal`, `bunkerModal`, `generateModal`, `nip46UniversalModal` are all booleans. The refresh's "More sign-in methods" disclosure is independent of these: clicking a method in the disclosure sets one of the booleans true and opens its sub-modal on top. So we have nesting: outer modal (the login card itself, if it remains a modal) and inner sub-modals (one per method). The brief shows the disclosure inline in the main card, not in its own modal — confirm that's the intent.
-- **Redirect param.** `+page.svelte:109` reads `$page.url.searchParams.get('redirect') || '/explore'`. If we restructure the modal into a component, that param has to stay accessible at the calling layer. Easiest: keep handlers and redirect on the page, only the markup moves.
-- **`SuggestedFollowsModal`** (`+page.svelte:973-984`) renders as a sibling after generate-keys completes, gated by `showSuggestedFollows`. The refresh should keep that handoff working — after Create Profile finishes, the new modal closes, and SuggestedFollowsModal opens.
-- **Brand assets.** Brief calls for "flame/ember gradient circle with the lightning bolt, gentle pulse animation" and "lightning-bolt logo flicker." No SVG/asset path is provided. Do we have a logo asset to use, or do I assemble the gradient circle inline? Flag.
+## 6. Mobile / Capacitor considerations
+
+- iOS uses `LoginFormIOS.svelte`, structurally different (full-page scrolling card, not viewport-centered modal with backdrop blur). Drops NIP-07 (no extension on iOS) and drops QR/universal pairing (App Store cross-app handoff policy). Today's iOS hierarchy: Create Profile (primary), import private key + bunker paste as secondaries.
+- **The brief's tile-row (Scan QR / Bunker URI / Import key) doesn't map cleanly to iOS.** QR and "Pair phone" can't ship on iOS per platform policy. Two paths:
+  - **(A) iOS shows two tiles** — Bunker URI + Import key — with the QR tile omitted entirely. Cleanest UX.
+  - **(B) iOS shows three tiles** with the QR tile disabled and a small note explaining the App Store restriction. Honest but cluttered.
+  - Recommend (A). The existing `supportsNIP46QRPairing()` helper at `src/lib/platform.ts:134` already returns `false` on iOS — wire the UI off it.
+- **Safe-area:** `src/app.css:18-23` defines `--safe-area-inset-*` from `env(safe-area-inset-*)`. The new card needs `padding-top/bottom: max(1.5rem, env(safe-area-inset-*))` on mobile, especially for iOS notched devices. Not handled today on the LoginFormIOS form.
+- **Keyboard overlap:** no `visualViewport` workarounds in the login flow today. Capacitor's keyboard plugin presumably handles it implicitly. Worth a manual smoke during implementation, particularly for the bunker-paste textarea since it's the only form input on the iOS card.
+- **Platform helpers exist but aren't called by the login route today.** The platform-gating on iOS is implicit (different file). The refresh should call `supportsNIP46QRPairing()` and `supportsNIP46BunkerPaste()` from `src/lib/platform.ts` so the policy lives in one place.
+
+## 7. Risks / surprises
+
+- **Form state lives on the page, not in sub-modal components.** `nsecInput`, `bunkerConnectionString`, `generatedKeys`, profile fields are all page-level `let`s. Existing pattern; the refresh should keep it.
+- **Multi-step Create Profile flow.** `useGeneratedKeys()` is a multi-step modal (backup → profile). Next button at `:835` is `disabled={!backupDownloaded}` — a load-bearing guard. Brief shows only the entry-point hierarchy; **the inner Create Profile multi-step is unchanged in this refresh** unless told otherwise.
+- **NIP-46 universal pairing has a side-effect listener** that outlives the modal. Triggers `authState.isAuthenticated → true` async via relay listener. ESC/backdrop close on the QR sub-modal does NOT abort the listener today. Existing behavior, not changed.
+- **`bind:open` on every sub-modal is load-bearing** (`nsecModal`, `bunkerModal`, `generateModal`, `nip46UniversalModal` are all booleans driving `<Modal bind:open={...}>`). The new tile buttons set those booleans to `true`; existing pattern works fine.
+- **Redirect param.** `+page.svelte:109` reads `$page.url.searchParams.get('redirect') || '/explore'`. Stays at the page level.
+- **`SuggestedFollowsModal`** (`+page.svelte:973-984`) renders post-Create-Profile, gated by `showSuggestedFollows`. Refresh keeps that handoff working.
+- **Background visual layer.** Lines 990-1003 of the current `+page.svelte` have animated emoji bouncing in the background. The new dark-surface card with the brief's palette will look strange behind those — they should either be removed or wholly hidden behind a darker scrim. Flag.
+- **Tailwind config is minimal** (`tailwind.config.cjs`: just plugins, no custom palette). The brief's palette tokens (ink/surface/elevated/line/flame/ember/cream/wheat/mute) can be added either to the Tailwind config or scoped as CSS custom properties on the login surface. Existing convention is CSS custom properties (see `src/app.css:49-86` for `--color-*` tokens). Recommend matching that pattern — adds the new tokens to the existing system rather than introducing a parallel one.
 
 ---
 
 ## Open questions answered (from the brief)
 
-- **Modal used elsewhere?** No. All sign-in flows funnel to `/login`. Confirmed by exhaustive grep over component imports.
-- **Tailwind / design tokens?** Yes. `tailwind.config.cjs` is standard with `@tailwindcss/forms` + `@tailwindcss/typography`. CSS custom properties live in `src/app.css:49-86` — `--color-primary: #ec4700` (orange), full light/dark ramps, `--bc-color-brand` for Bitcoin Connect parity. The modal already uses these tokens; the refresh should too.
-- **i18n layer?** None. No `svelte-i18n` / `i18next` / `t()` / `$_`. Strings are hard-coded English throughout. The refresh keeps strings hard-coded; if i18n lands later it's a separate sweep.
+- **Modal used elsewhere?** No. All sign-in flows funnel to `/login`.
+- **Tailwind palette tokens?** Tailwind config is bare; existing tokens live in `src/app.css:49-86` as CSS custom properties. Recommend adding the new flame/ember palette as additional `--color-*` tokens scoped to the login surface (or globally if we want them available app-wide).
+- **i18n layer?** None. No `svelte-i18n` / `i18next` / `t()` / `$_`. Strings are hard-coded English.
+- **Dark-mode wordmark SVG?** Exists at `static/zap_cooking_logo_white.svg`. Pure white, not the brief's cream tint. See B3.
 
 ## Open questions back to you
 
-1. **B1 — drop the mockup into the repo or accept building from inline brief?** Need before I start implementation.
-2. **B2 — confirm "four methods" was a typo for five.**
-3. **iOS form — refresh `LoginFormIOS.svelte` in the same PR with parity styling, or collapse iOS + web into one component (bigger scope)?** Recommend the former.
-4. **Multi-step Create Profile flow** — is the new design supposed to redesign that as well, or just the entry-point card? The brief shows only the entry hierarchy.
-5. **Brand asset for the lightning bolt** — existing SVG path or inline-build the gradient circle?
-6. **Disclosure inline or as its own sub-modal?** Brief reads inline; confirming.
-7. **NIP-46 pairing-mid-close** — when the user opens "scan QR / pair phone" and then ESCs out, do we want the pairing to continue silently in the background (current behavior would, since the listener isn't tied to the modal), or aborted on close?
+1. **B1 — drop `docs/design/signin-modal-final.html` into the repo, or implement from inline brief?**
+2. **B2 — confirm Albert Sans gets added via Google Fonts (zero-dep, consistent with Orbitron loading)?**
+3. **B3 — use existing white wordmark, or add a cream-tinted variant?**
+4. **iOS tile row** — drop the QR tile (option A) or show it disabled (option B)?
+5. **Background animated emojis** (`+page.svelte:990-1003`) — keep them behind the new scrim, or remove for the cleaner dark surface?
+6. **Wordmark flame gradient** — keep existing `#FFAA00 → #FF0C1C` or update source SVG to the new `flame #F7931A / ember #FF5F1F` ramp?
+7. **Add basic auth analytics** alongside the refresh (out of scope per the brief; flagging because the funnel is currently un-instrumented)?
 
-Stopping here for review per the brief — no implementation until these are addressed.
+Stopping here per the brief — no implementation until these are addressed. PR #345 stays as-is on `feat/signin-modal-refresh` for reference; once direction is confirmed, the next pass will start fresh on a new implementation branch.
